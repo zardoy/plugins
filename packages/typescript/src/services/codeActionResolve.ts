@@ -56,12 +56,41 @@ export function resolveRefactorCodeAction(
 	if (!editInfo) {
 		return;
 	}
+	patchBuiltinEditRefactoring(editInfo, codeAction, ctx, data);
 	codeAction.edit = fileTextChangesToWorkspaceEdit(editInfo.edits, ctx);
 	if (editInfo.renameLocation !== undefined && editInfo.renameFilename !== undefined) {
 		codeAction.command = ctx.commands.createRenameCommand(
 			document.uri,
 			document.positionAt(editInfo.renameLocation),
 		);
+	}
+}
+
+function patchBuiltinEditRefactoring(editInfo: ts.RefactorEditInfo, codeAction: vscode.CodeAction, ctx: SharedContext, data: RefactorData): ts.RefactorEditInfo | void {
+	const ts = ctx.typescript.module;
+	const sourceFile = ctx.typescript.languageService.getProgram()!.getSourceFile(data.fileName)!;
+	const posBeforeStatement = (predicate: (statement: ts.Statement) => boolean) => {
+		for (const statement of sourceFile.statements) {
+			if (predicate(statement)) return statement.pos + 1;
+		}
+	};
+	let newSecondEditPos: number | undefined;
+	switch (codeAction.title) {
+		case 'Extract to function in global scope':
+			const [vueFile] = ctx!.documents.getVirtualFileByUri(ctx.fileNameToUri(data.fileName.slice(0, -3)));
+			if (!vueFile) {
+				return;
+			}
+			newSecondEditPos = sourceFile.getFullText().indexOf('const __VLS_componentsOption') - 1;
+			// newSecondEditPos = (vueFile as any).sfc.script.startTagEnd;
+			break;
+		case 'Extract to function in module scope': {
+			newSecondEditPos = posBeforeStatement((statement) => ts.isExportAssignment(statement));
+			break;
+		}
+	}
+	if (newSecondEditPos) {
+		editInfo.edits[0].textChanges[1].span.start = newSecondEditPos!;
 	}
 }
 
